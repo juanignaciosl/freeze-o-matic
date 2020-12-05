@@ -44,9 +44,10 @@ ending in `.tar.gz`. The directory will be packed, compressed and uploaded to th
 
 Example:
 
-    /tmp/test,my-glacier-dir/test.tar.gz,
+    /tmp/test,my-glacier-dir/test.tar.gz,,
 
-_Please note the trailing comma, meaning that the default storage class (Deep Archive) will be used_.
+_Please note the trailing commas, meaning that the default storage class (Deep Archive) will be used, and that the
+upload won't be forced_.
 
 ## Running
 
