@@ -1,1 +1,1 @@
-flake8 src && mypy -p src
+flake8 freezeomatic && mypy -p freezeomatic
