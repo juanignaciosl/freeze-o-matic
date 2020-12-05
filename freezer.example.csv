@@ -1,2 +1,4 @@
-freezer.example.csv,freezer.example.csv
-freezer.example.csv.lock,freezer.example.csv.lock
+freezer.example.csv,freezer.example.csv,STANDARD,force
+freezer.example.csv.lock,freezer.example.csv.lock,STANDARD,force
+/home/myself/an_important_directory,important_directories/important_directory.tar.gz,STANDARD,
+/home/myself/photos/2015,immutable_directories/photos/2015.tar.gz,,
