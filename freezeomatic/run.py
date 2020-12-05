@@ -6,6 +6,8 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import List
 
+import boto3
+
 from freezeomatic.utils import get_logger
 
 logger = get_logger(__name__)
@@ -97,12 +99,17 @@ def _update_lock_entries(freezer_entries: List[FreezerEntry],
 
 def _upload(lock_path: str, lock_entries: List[FreezerLockEntry],
             bucket: str) -> None:
+    s3 = boto3.client('s3')
     _dump_lock(lock_path, lock_entries)
     pending = [e for e in lock_entries if not e.uploaded()]
     for entry in pending:
         entry.status = LockStatus.FREEZING
         _dump_lock(lock_path, lock_entries)
         logger.debug(f'Uploading {entry}...')
+        s3.upload_file(entry.source_path, bucket, entry.target_path,
+                       ExtraArgs={'ServerSideEncryption': 'AES256'})
+        entry.status = LockStatus.FROZEN
+        _dump_lock(lock_path, lock_entries)
 
 
 def _dump_lock(path: str, entries: List[FreezerLockEntry]) -> None:
