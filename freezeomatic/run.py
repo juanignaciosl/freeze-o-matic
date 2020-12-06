@@ -63,14 +63,15 @@ class FreezerLockEntry:
         return self.status not in UPLOADED_STATUSES or self.force
 
 
-def freeze(bucket: str, freezer_path: str, python_tar: bool) -> int:
+def freeze(bucket: str, freezer_path: str, python_tar: bool,
+           tmp_dir: str) -> int:
     freezer_entries = _read_freezer(freezer_path)
     lock_path = f'{freezer_path}.lock'
     freezer_lock_entries = _read_lock(lock_path)
 
     updated_lock_entries = _update_lock_entries(freezer_entries,
                                                 freezer_lock_entries)
-    _upload(lock_path, updated_lock_entries, bucket, python_tar)
+    _upload(lock_path, updated_lock_entries, bucket, python_tar, tmp_dir)
 
     return 0
 
@@ -133,27 +134,27 @@ def _update_lock_entries(freezer_entries: List[FreezerEntry],
 
 
 def _upload(lock_path: str, lock_entries: List[FreezerLockEntry],
-            bucket: str, python_tar: bool) -> None:
+            bucket: str, python_tar: bool, tmp_dir: str) -> None:
     s3 = boto3.client('s3')
     _dump_lock(lock_path, lock_entries)
     pending = [e for e in lock_entries if e.requires_upload()]
     for entry in pending:
         entry.status = LockStatus.FREEZING
         _dump_lock(lock_path, lock_entries)
-        _upload_entry(s3, entry, bucket, python_tar)
+        _upload_entry(s3, entry, bucket, python_tar, tmp_dir)
         entry.status = LockStatus.FROZEN
         _dump_lock(lock_path, lock_entries)
 
 
 def _upload_entry(s3: Any, entry: FreezerLockEntry, bucket: str,
-                  python_tar: bool) -> None:
+                  python_tar: bool, tmp_dir: str) -> None:
     source_path = entry.source_path
     target_path = entry.target_path
     storage_class = entry.storage_class
     if os.path.isfile(source_path):
         _upload_file(s3, source_path, bucket, target_path, storage_class)
     elif os.path.isdir(source_path) and target_path.endswith('tar.gz'):
-        local_tgz = os.path.join(gettempdir(),
+        local_tgz = os.path.join(tmp_dir,
                                  f'{os.path.basename(source_path)}.tar.gz')
         logger.debug(f'Compressing {source_path} into {local_tgz}...')
         if python_tar:
@@ -192,9 +193,10 @@ def main() -> int:
     parser.add_argument('--freezer', type=str, required=True)
     parser.add_argument('--python-tar', action='store_true',
                         help='Use Python tarfile instead of tar -czf')
+    parser.add_argument('--tmp-dir', type=str, default=gettempdir())
     args = parser.parse_args()
 
-    return freeze(args.bucket, args.freezer, args.python_tar)
+    return freeze(args.bucket, args.freezer, args.python_tar, args.tmp_dir)
 
 
 if __name__ == '__main__':
