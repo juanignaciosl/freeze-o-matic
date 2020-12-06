@@ -160,7 +160,7 @@ def _upload_entry(s3: Any, entry: FreezerLockEntry, bucket: str,
             with tarfile.open(local_tgz, 'w|gz') as tar:
                 tar.add(source_path, arcname=os.path.basename(source_path))
         else:
-            subprocess.run(['tar', '-czf', local_tgz, source_path], check=True)
+            subprocess.run(['tar', '--use-compress-program=pigz', '-cf', local_tgz, source_path], check=True)
 
         _upload_file(s3, local_tgz, bucket, target_path, storage_class)
         os.remove(local_tgz)
