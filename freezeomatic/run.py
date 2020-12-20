@@ -10,6 +10,9 @@ from tempfile import gettempdir
 from typing import List, Any
 
 import boto3
+import botocore
+import boto3.s3.transfer as s3transfer
+import tqdm
 
 from freezeomatic.utils import get_logger
 
@@ -135,13 +138,19 @@ def _update_lock_entries(freezer_entries: List[FreezerEntry],
 
 def _upload(lock_path: str, lock_entries: List[FreezerLockEntry],
             bucket: str, python_tar: bool, tmp_dir: str) -> None:
-    s3 = boto3.client('s3')
+    botocore_config = botocore.config.Config(max_pool_connections=20)
+    s3 = boto3.client('s3', config=botocore_config)
+    transfer_config = s3transfer.TransferConfig(
+        use_threads=True,
+        max_concurrency=20,
+    )
+    s3t = s3transfer.create_transfer_manager(s3, transfer_config)
     _dump_lock(lock_path, lock_entries)
     pending = [e for e in lock_entries if e.requires_upload()]
     for entry in pending:
         entry.status = LockStatus.FREEZING
         _dump_lock(lock_path, lock_entries)
-        _upload_entry(s3, entry, bucket, python_tar, tmp_dir)
+        _upload_entry(s3t, entry, bucket, python_tar, tmp_dir)
         entry.status = LockStatus.FROZEN
         _dump_lock(lock_path, lock_entries)
 
@@ -156,12 +165,18 @@ def _upload_entry(s3: Any, entry: FreezerLockEntry, bucket: str,
     elif os.path.isdir(source_path) and target_path.endswith('tar.gz'):
         local_tgz = os.path.join(tmp_dir,
                                  f'{os.path.basename(source_path)}.tar.gz')
-        logger.debug(f'Compressing {source_path} into {local_tgz}...')
-        if python_tar:
-            with tarfile.open(local_tgz, 'w|gz') as tar:
-                tar.add(source_path, arcname=os.path.basename(source_path))
+        if os.path.isfile(local_tgz):
+            logger.debug(f'Not recompressing {source_path} because of '
+                         f'existing {local_tgz}...')
         else:
-            subprocess.run(['tar', '--use-compress-program=pigz', '-cf', local_tgz, source_path], check=True)
+            logger.debug(f'Compressing {source_path} into {local_tgz}...')
+            if python_tar:
+                with tarfile.open(local_tgz, 'w|gz') as tar:
+                    tar.add(source_path, arcname=os.path.basename(source_path))
+            else:
+                subprocess.run(
+                    ['tar', '--use-compress-program=pigz', '-cf', local_tgz,
+                     source_path], check=True)
 
         _upload_file(s3, local_tgz, bucket, target_path, storage_class)
         os.remove(local_tgz)
@@ -172,9 +187,17 @@ def _upload_entry(s3: Any, entry: FreezerLockEntry, bucket: str,
 def _upload_file(s3: Any, source_path: str, bucket: str,
                  target_path: str, storage_class: StorageClass) -> None:
     logger.debug(f'Uploading {source_path} to {target_path}...')
-    s3.upload_file(source_path, bucket, target_path,
-                   ExtraArgs={'ServerSideEncryption': 'AES256',
-                              'StorageClass': storage_class.name})
+    total_size = os.path.getsize(source_path)
+    progress = tqdm.tqdm(
+        desc='upload',
+        total=total_size, unit='B', unit_scale=1,
+        position=0,
+        bar_format='{desc:<10}{percentage:3.0f}%|{bar:10}{r_bar}')
+    s3.upload(source_path, bucket, target_path,
+              extra_args={'ServerSideEncryption': 'AES256',
+                          'StorageClass': storage_class.name},
+              subscribers=[
+                  s3transfer.ProgressCallbackInvoker(progress.update)])
 
 
 def _dump_lock(path: str, entries: List[FreezerLockEntry]) -> None:
