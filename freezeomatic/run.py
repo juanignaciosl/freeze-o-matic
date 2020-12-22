@@ -7,16 +7,19 @@ from argparse import ArgumentParser
 from dataclasses import dataclass, replace
 from enum import Enum
 from tempfile import gettempdir
-from typing import List, Any
+from typing import List
 
 import boto3
 import botocore
 import boto3.s3.transfer as s3transfer
 import tqdm
+from botocore.exceptions import ClientError
 
 from freezeomatic.utils import get_logger
 
 logger = get_logger(__name__)
+
+CONNECTIONS = 15
 
 
 class StorageClass(Enum):
@@ -138,30 +141,23 @@ def _update_lock_entries(freezer_entries: List[FreezerEntry],
 
 def _upload(lock_path: str, lock_entries: List[FreezerLockEntry],
             bucket: str, python_tar: bool, tmp_dir: str) -> None:
-    botocore_config = botocore.config.Config(max_pool_connections=20)
-    s3 = boto3.client('s3', config=botocore_config)
-    transfer_config = s3transfer.TransferConfig(
-        use_threads=True,
-        max_concurrency=20,
-    )
-    s3t = s3transfer.create_transfer_manager(s3, transfer_config)
     _dump_lock(lock_path, lock_entries)
     pending = [e for e in lock_entries if e.requires_upload()]
     for entry in pending:
         entry.status = LockStatus.FREEZING
         _dump_lock(lock_path, lock_entries)
-        _upload_entry(s3t, entry, bucket, python_tar, tmp_dir)
-        entry.status = LockStatus.FROZEN
+        if _upload_entry(entry, bucket, python_tar, tmp_dir):
+            entry.status = LockStatus.FROZEN
         _dump_lock(lock_path, lock_entries)
 
 
-def _upload_entry(s3: Any, entry: FreezerLockEntry, bucket: str,
-                  python_tar: bool, tmp_dir: str) -> None:
+def _upload_entry(entry: FreezerLockEntry, bucket: str,
+                  python_tar: bool, tmp_dir: str) -> bool:
     source_path = entry.source_path
     target_path = entry.target_path
     storage_class = entry.storage_class
     if os.path.isfile(source_path):
-        _upload_file(s3, source_path, bucket, target_path, storage_class)
+        _upload_file(source_path, bucket, target_path, storage_class)
     elif os.path.isdir(source_path) and target_path.endswith('tar.gz'):
         local_tgz = os.path.join(tmp_dir,
                                  f'{os.path.basename(source_path)}.tar.gz')
@@ -178,26 +174,47 @@ def _upload_entry(s3: Any, entry: FreezerLockEntry, bucket: str,
                     ['tar', '--use-compress-program=pigz', '-cf', local_tgz,
                      source_path], check=True)
 
-        _upload_file(s3, local_tgz, bucket, target_path, storage_class)
-        os.remove(local_tgz)
+        if _upload_file(local_tgz, bucket, target_path, storage_class):
+            logger.debug(f'Upload finished for {local_tgz}')
+            os.remove(local_tgz)
+            return True
     else:
         raise ValueError(f'Unsupported entry upload: {entry}')
+    return False
 
 
-def _upload_file(s3: Any, source_path: str, bucket: str,
-                 target_path: str, storage_class: StorageClass) -> None:
+def _upload_file(source_path: str, bucket: str,
+                 target_path: str, storage_class: StorageClass) -> bool:
     logger.debug(f'Uploading {source_path} to {target_path}...')
+    botocore_config = botocore.config.Config(max_pool_connections=CONNECTIONS)
+    s3 = boto3.client('s3', config=botocore_config)
+    transfer_config = s3transfer.TransferConfig(
+        use_threads=True,
+        max_concurrency=CONNECTIONS,
+    )
+    s3t = s3transfer.create_transfer_manager(s3, transfer_config)
     total_size = os.path.getsize(source_path)
     progress = tqdm.tqdm(
         desc='upload',
         total=total_size, unit='B', unit_scale=1,
         position=0,
         bar_format='{desc:<10}{percentage:3.0f}%|{bar:10}{r_bar}')
-    s3.upload(source_path, bucket, target_path,
-              extra_args={'ServerSideEncryption': 'AES256',
-                          'StorageClass': storage_class.name},
-              subscribers=[
-                  s3transfer.ProgressCallbackInvoker(progress.update)])
+    future = s3t.upload(source_path, bucket, target_path,
+                        extra_args={'ServerSideEncryption': 'AES256',
+                                    'StorageClass': storage_class.name},
+                        subscribers=[
+                            s3transfer.ProgressCallbackInvoker(
+                                progress.update)])
+    try:
+        future.result()
+    except ClientError as e:
+        logger.error(f'Upload failed for {source_path} to {target_path}', e)
+        return False
+    finally:
+        s3t.shutdown()
+        progress.close()
+
+    return True
 
 
 def _dump_lock(path: str, entries: List[FreezerLockEntry]) -> None:
