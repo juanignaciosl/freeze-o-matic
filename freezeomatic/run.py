@@ -158,29 +158,58 @@ def _upload_entry(entry: FreezerLockEntry, bucket: str,
     storage_class = entry.storage_class
     if os.path.isfile(source_path):
         _upload_file(source_path, bucket, target_path, storage_class)
-    elif os.path.isdir(source_path) and target_path.endswith('tar.gz'):
-        local_tgz = os.path.join(tmp_dir,
-                                 f'{os.path.basename(source_path)}.tar.gz')
-        if os.path.isfile(local_tgz):
-            logger.debug(f'Not recompressing {source_path} because of '
-                         f'existing {local_tgz}...')
+    elif os.path.isdir(source_path):
+        if target_path.endswith('tar.gz'):
+            local_file = _compress_tgz(entry, python_tar, tmp_dir)
+        elif target_path.endswith('tar'):
+            local_file = _pack_tar(entry, python_tar, tmp_dir)
         else:
-            logger.debug(f'Compressing {source_path} into {local_tgz}...')
-            if python_tar:
-                with tarfile.open(local_tgz, 'w|gz') as tar:
-                    tar.add(source_path, arcname=os.path.basename(source_path))
-            else:
-                subprocess.run(
-                    ['tar', '--use-compress-program=pigz', '-cf', local_tgz,
-                     source_path], check=True)
+            raise ValueError(f'Unknown extension for dir: {target_path}')
 
-        if _upload_file(local_tgz, bucket, target_path, storage_class):
-            logger.debug(f'Upload finished for {local_tgz}')
-            os.remove(local_tgz)
+        if _upload_file(local_file, bucket, target_path, storage_class):
+            logger.debug(f'Upload finished for {local_file}')
+            # TODO:
+            # os.remove(local_tgz)
             return True
     else:
         raise ValueError(f'Unsupported entry upload: {entry}')
     return False
+
+
+def _compress_tgz(entry: FreezerLockEntry, python_tar: bool, tmp_dir: str):
+    source_path = entry.source_path
+    local_tgz = os.path.join(tmp_dir,
+                             f'{os.path.basename(source_path)}.tar.gz')
+    if os.path.isfile(local_tgz):
+        logger.debug(f'Not recompressing {source_path} because of '
+                     f'existing {local_tgz}...')
+    else:
+        logger.debug(f'Compressing {source_path} into {local_tgz}...')
+        if python_tar:
+            with tarfile.open(local_tgz, 'w|gz') as tar:
+                tar.add(source_path, arcname=os.path.basename(source_path))
+        else:
+            subprocess.run(
+                [f'tar --use-compress-program=pigz -cf "{local_tgz}" *'],
+                check=True, cwd=source_path, shell=True)
+    return local_tgz
+
+
+def _pack_tar(entry: FreezerLockEntry, python_tar: bool, tmp_dir: str):
+    source_path = entry.source_path
+    local_tar = os.path.join(tmp_dir, f'{os.path.basename(source_path)}.tar')
+    if os.path.isfile(local_tar):
+        logger.debug(f'Not repacking {source_path} because of '
+                     f'existing {local_tar}...')
+    else:
+        logger.debug(f'Packing {source_path} into {local_tar}...')
+        if python_tar:
+            with tarfile.open(local_tar, 'w') as tar:
+                tar.add(source_path, arcname=os.path.basename(source_path))
+        else:
+            subprocess.run([f'tar -cf "{local_tar}" *'],
+                           check=True, cwd=source_path, shell=True)
+    return local_tar
 
 
 def _upload_file(source_path: str, bucket: str,
