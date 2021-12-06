@@ -158,6 +158,7 @@ def _upload_entry(entry: FreezerLockEntry, bucket: str,
     storage_class = entry.storage_class
     if os.path.isfile(source_path):
         _upload_file(source_path, bucket, target_path, storage_class)
+        return True
     elif os.path.isdir(source_path):
         if target_path.endswith('tar.gz'):
             local_file = _compress_tgz(entry, python_tar, tmp_dir)
