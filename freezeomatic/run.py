@@ -168,7 +168,7 @@ def _upload_entry(entry: FreezerLockEntry, bucket: str,
             raise ValueError(f'Unknown extension for dir: {target_path}')
 
         if _upload_file(local_file, bucket, target_path, storage_class):
-            logger.debug(f'Upload finished for {local_file}')
+            logger.debug(f'Upload finished for {local_file} (delete manually)')
             # TODO:
             # os.remove(local_tgz)
             return True
@@ -191,7 +191,7 @@ def _compress_tgz(entry: FreezerLockEntry, python_tar: bool, tmp_dir: str):
                 tar.add(source_path, arcname=os.path.basename(source_path))
         else:
             subprocess.run(
-                [f'tar --use-compress-program=pigz -cf "{local_tgz}" *'],
+                [f'sudo tar --use-compress-program=pigz -cf "{local_tgz}" *'],
                 check=True, cwd=source_path, shell=True)
     return local_tgz
 
