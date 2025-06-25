@@ -1,5 +1,5 @@
-flake8==3.8.3
-mypy==0.790
-mypy-extensions==0.4.3
-boto3==1.16.40
-tqdm==4.54.1
+flake8
+mypy
+mypy-extensions
+boto3
+tqdm
